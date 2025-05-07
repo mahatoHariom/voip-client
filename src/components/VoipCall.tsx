@@ -8,6 +8,8 @@ const VoipCall = () => {
   const [isMuted, setIsMuted] = useState<boolean>(false);
   const [isInitialized, setIsInitialized] = useState<boolean>(false);
   const [error, setError] = useState<string>("");
+  const [showTroubleshooting, setShowTroubleshooting] =
+    useState<boolean>(false);
 
   useEffect(() => {
     // Cleanup resources when component unmounts
@@ -23,15 +25,33 @@ const VoipCall = () => {
     }
 
     setError("");
+    setCallStatus("initializing");
 
     try {
       await twilioService.initialize(identity, (status) => {
-        setCallStatus(status);
+        console.log(`Call status changed to: ${status}`);
+
+        // Check if the status contains error information
+        if (status.startsWith("error:")) {
+          setError(status.substring(7)); // Remove "error: " prefix
+          setCallStatus("error");
+        } else {
+          setCallStatus(status);
+          if (status === "ready") {
+            setError("");
+          }
+        }
       });
       setIsInitialized(true);
     } catch (error) {
       console.error("Error initializing Twilio:", error);
-      setError("Failed to initialize Twilio service");
+      const errorMessage =
+        error instanceof Error
+          ? error.message
+          : "Failed to initialize Twilio service";
+      setError(`Twilio error: ${errorMessage}`);
+      setCallStatus("error");
+      setIsInitialized(false);
     }
   };
 
@@ -161,6 +181,48 @@ const VoipCall = () => {
     return null;
   };
 
+  const renderTroubleshooting = () => {
+    if (!showTroubleshooting) {
+      return (
+        <button
+          onClick={() => setShowTroubleshooting(true)}
+          className="mt-2 text-blue-600 hover:text-blue-800 text-sm"
+        >
+          Show troubleshooting tips
+        </button>
+      );
+    }
+
+    return (
+      <div className="mt-4 p-4 bg-blue-50 rounded text-sm">
+        <h3 className="font-bold mb-2">Troubleshooting Tips:</h3>
+        <ul className="list-disc list-inside space-y-1">
+          <li>Check that your browser allows microphone access</li>
+          <li>
+            Ensure you're using a supported browser (Chrome, Firefox, Edge)
+          </li>
+          <li>
+            Verify that the server is running at{" "}
+            <code>http://localhost:9000</code>
+          </li>
+          <li>Make sure ngrok is running and the URL is correct</li>
+          <li>
+            Check that your Twilio account is active and configured properly
+          </li>
+          <li>
+            Verify network connectivity and firewalls aren't blocking WebRTC
+          </li>
+        </ul>
+        <button
+          onClick={() => setShowTroubleshooting(false)}
+          className="mt-2 text-blue-600 hover:text-blue-800"
+        >
+          Hide tips
+        </button>
+      </div>
+    );
+  };
+
   return (
     <div className="max-w-md mx-auto bg-white p-6 rounded-lg shadow-lg">
       <h2 className="text-2xl font-bold mb-6 text-center">VOIP Client</h2>
@@ -175,12 +237,18 @@ const VoipCall = () => {
               placeholder="Enter your identity"
               value={identity}
               onChange={(e) => setIdentity(e.target.value)}
+              disabled={callStatus === "initializing"}
             />
             <button
-              className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
+              className={`px-4 py-2 ${
+                callStatus === "initializing"
+                  ? "bg-gray-400 cursor-not-allowed"
+                  : "bg-blue-600 hover:bg-blue-700"
+              } text-white rounded`}
               onClick={handleInitialize}
+              disabled={callStatus === "initializing"}
             >
-              Initialize
+              {callStatus === "initializing" ? "Initializing..." : "Initialize"}
             </button>
           </div>
         </div>
@@ -202,6 +270,10 @@ const VoipCall = () => {
                 ? "bg-green-100 text-green-800"
                 : callStatus === "connecting" || callStatus === "incoming"
                 ? "bg-yellow-100 text-yellow-800"
+                : callStatus === "error"
+                ? "bg-red-100 text-red-800"
+                : callStatus === "ready"
+                ? "bg-blue-100 text-blue-800"
                 : "bg-gray-100 text-gray-800"
             }`}
           >
@@ -214,7 +286,8 @@ const VoipCall = () => {
 
       {error && (
         <div className="mt-4 px-4 py-2 bg-red-100 text-red-700 rounded">
-          {error}
+          <p>{error}</p>
+          {renderTroubleshooting()}
         </div>
       )}
     </div>
