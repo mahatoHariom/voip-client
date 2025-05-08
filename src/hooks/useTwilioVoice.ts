@@ -27,7 +27,6 @@ interface TwilioError extends Error {
   status?: number;
 }
 
-// Combined interface for Twilio Device and Call with their event handlers
 interface TwilioDevice extends Device {
   on(
     event: "registered" | "unregistered" | "tokenWillExpire" | "tokenExpired",
