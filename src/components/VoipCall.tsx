@@ -1,115 +1,52 @@
-import { useState, useEffect } from "react";
-import twilioService from "../services/twilioService";
-
-type CallStatus =
-  | "disconnected"
-  | "initializing"
-  | "ready"
-  | "connecting"
-  | "in-progress"
-  | "incoming"
-  | "error"
-  | "cancelled"
-  | "rejected";
+import { useState } from "react";
+import { useTwilioVoice } from "../hooks/useTwilioVoice";
 
 const VoipCall = () => {
-  const [identity, setIdentity] = useState<string>("");
+  const [identityInput, setIdentityInput] = useState<string>("");
   const [destination, setDestination] = useState<string>("");
-  const [callStatus, setCallStatus] = useState<CallStatus>("disconnected");
-  const [isMuted, setIsMuted] = useState<boolean>(false);
-  const [isInitialized, setIsInitialized] = useState<boolean>(false);
-  const [error, setError] = useState<string>("");
 
-  useEffect(() => {
-    return () => twilioService.destroy();
-  }, []);
-
-  console.log(error);
+  const {
+    identity,
+    callStatus,
+    error,
+    isMuted,
+    isInitialized,
+    initialize,
+    makeCall,
+    answerCall,
+    rejectCall,
+    endCall,
+    mute,
+    unmute,
+  } = useTwilioVoice();
 
   const handleInitialize = async () => {
-    if (!identity) {
-      setError("Please enter your identity");
+    if (!identityInput) {
       return;
     }
-
-    setError("");
-    setCallStatus("initializing");
-
-    try {
-      await twilioService.initialize(identity, (status) => {
-        if (status.startsWith("error:")) {
-          setError(status.substring(7));
-          setCallStatus("error");
-        } else {
-          setCallStatus(status as CallStatus);
-          if (status === "ready") setError("");
-        }
-      });
-      setIsInitialized(true);
-    } catch (error) {
-      const errorMessage =
-        error instanceof Error
-          ? error.message
-          : "Failed to initialize Twilio service";
-      setError(`Twilio error: ${errorMessage}`);
-      setCallStatus("error");
-      setIsInitialized(false);
-    }
+    await initialize(identityInput);
   };
 
   const handleMakeCall = async () => {
     if (!destination) {
-      setError("Please enter a destination client identity");
       return;
     }
-
-    setError("");
     try {
-      await twilioService.makeCall(destination);
+      await makeCall(destination);
     } catch (error: unknown) {
       console.error(error);
-      setError("Failed to initiate call");
-    }
-  };
-
-  const handleAnswerCall = () => {
-    try {
-      twilioService.answerCall();
-    } catch (error: unknown) {
-      console.error(error);
-      setError("Failed to answer call");
-    }
-  };
-
-  const handleRejectCall = () => {
-    try {
-      twilioService.rejectCall();
-    } catch (error: unknown) {
-      console.error(error);
-      setError("Failed to reject call");
-    }
-  };
-
-  const handleEndCall = () => {
-    try {
-      twilioService.endCall();
-    } catch (error: unknown) {
-      console.error(error);
-      setError("Failed to end call");
     }
   };
 
   const handleToggleMute = () => {
     try {
       if (isMuted) {
-        twilioService.unmute();
+        unmute();
       } else {
-        twilioService.mute();
+        mute();
       }
-      setIsMuted(!isMuted);
     } catch (error: unknown) {
       console.error(error);
-      setError("Failed to toggle mute");
     }
   };
 
@@ -119,13 +56,13 @@ const VoipCall = () => {
         <div className="flex space-x-4 mt-4">
           <button
             className="px-4 py-2 bg-white border border-gray-300 text-black rounded"
-            onClick={handleAnswerCall}
+            onClick={answerCall}
           >
             Answer
           </button>
           <button
             className="px-4 py-2 bg-white border border-gray-300 text-black rounded"
-            onClick={handleRejectCall}
+            onClick={rejectCall}
           >
             Reject
           </button>
@@ -146,7 +83,7 @@ const VoipCall = () => {
           <div className="flex space-x-4">
             <button
               className="px-4 py-2 bg-white border border-gray-300 text-black rounded"
-              onClick={handleEndCall}
+              onClick={endCall}
             >
               End Call
             </button>
@@ -163,7 +100,9 @@ const VoipCall = () => {
 
     if (
       (isInitialized && callStatus === "ready") ||
-      callStatus === "disconnected"
+      callStatus === "disconnected" ||
+      callStatus === "cancelled" ||
+      callStatus === "rejected"
     ) {
       return (
         <div className="mt-4">
@@ -208,8 +147,8 @@ const VoipCall = () => {
               type="text"
               className="px-3 py-2 border border-gray-300 rounded w-full"
               placeholder="Enter your identity"
-              value={identity}
-              onChange={(e) => setIdentity(e.target.value)}
+              value={identityInput}
+              onChange={(e) => setIdentityInput(e.target.value)}
               disabled={callStatus === "initializing"}
             />
             <button
@@ -227,6 +166,12 @@ const VoipCall = () => {
             <span className="text-gray-600 text-sm">Identity:</span>
             <span className="text-gray-800">{identity}</span>
           </div>
+        </div>
+      )}
+
+      {error && (
+        <div className="mb-4 p-2 border border-red-200 bg-red-50 text-red-600">
+          {error}
         </div>
       )}
 
