@@ -2,17 +2,7 @@ import { useState, useCallback, useEffect, useRef } from "react";
 import { Device, Call } from "@twilio/voice-sdk";
 import axios from "axios";
 import { config } from "../config/env";
-
-type CallStatus =
-  | "disconnected"
-  | "initializing"
-  | "ready"
-  | "connecting"
-  | "in-progress"
-  | "incoming"
-  | "error"
-  | "cancelled"
-  | "rejected";
+import type { CallStatus } from "../types";
 
 interface TokenResponse {
   token: string;
@@ -21,10 +11,6 @@ interface TokenResponse {
 
 interface TwilioError extends Error {
   code?: number | string;
-  info?: string;
-  explanation?: string;
-  description?: string;
-  status?: number;
 }
 
 interface TwilioDevice extends Device {
@@ -49,19 +35,16 @@ enum Codec {
 }
 
 export const useTwilioVoice = () => {
-  // State management
   const [identity, setIdentity] = useState<string>("");
-  const [callStatus, setCallStatus] = useState<CallStatus>("disconnected");
+  const [callStatus, setCallStatus] = useState<CallStatus>("closed");
   const [error, setError] = useState<string>("");
   const [isMuted, setIsMuted] = useState<boolean>(false);
   const [isInitialized, setIsInitialized] = useState<boolean>(false);
 
-  // References
   const deviceRef = useRef<Device | null>(null);
   const activeCallRef = useRef<Call | null>(null);
   const tokenRef = useRef<string>("");
 
-  // Helper functions
   const handleError = useCallback(
     (error: unknown, prefix: string) =>
       `${prefix}: ${error instanceof Error ? error.message : String(error)}`,
@@ -78,12 +61,11 @@ export const useTwilioVoice = () => {
     }
   }, []);
 
-  const checkActiveCall = useCallback((errorMessage = "No active call") => {
-    if (!activeCallRef.current) throw new Error(errorMessage);
+  const checkActiveCall = useCallback(() => {
+    if (!activeCallRef.current) throw new Error("No active call");
     return activeCallRef.current;
   }, []);
 
-  // API interaction
   const getToken = useCallback(
     async (userIdentity: string): Promise<TokenResponse> => {
       try {
@@ -98,32 +80,22 @@ export const useTwilioVoice = () => {
     [handleError]
   );
 
-  // Event handlers
   const setupCallListeners = useCallback(
     (call: Call) => {
-      const twilioCall = call as unknown as TwilioCall;
+      const twilioCall = call as TwilioCall;
 
-      twilioCall.on("accept", () => updateCallStatus("in-progress"));
+      twilioCall.on("accept", () => updateCallStatus("open"));
 
-      twilioCall.on("disconnect", () => {
-        activeCallRef.current = null;
-        updateCallStatus("disconnected");
-      });
-
-      twilioCall.on("cancel", () => {
-        activeCallRef.current = null;
-        updateCallStatus("cancelled");
-      });
-
-      twilioCall.on("reject", () => {
-        activeCallRef.current = null;
-        updateCallStatus("rejected");
+      ["disconnect", "cancel", "reject"].forEach((event) => {
+        twilioCall.on(event as "disconnect" | "cancel" | "reject", () => {
+          activeCallRef.current = null;
+          updateCallStatus("closed");
+        });
       });
     },
     [updateCallStatus]
   );
 
-  // Core functions
   const initialize = useCallback(
     async (userIdentity: string) => {
       setIdentity(userIdentity);
@@ -142,20 +114,16 @@ export const useTwilioVoice = () => {
         const device = deviceRef.current as TwilioDevice;
 
         device.on("registered", () => updateCallStatus("ready"));
-        device.on("unregistered", () => updateCallStatus("disconnected"));
-        device.on("tokenWillExpire", () => {});
-        device.on("tokenExpired", () => updateCallStatus("disconnected"));
+        device.on("unregistered", () => updateCallStatus("closed"));
+        device.on("tokenExpired", () => updateCallStatus("closed"));
         device.on("error", (twilioError: TwilioError) => {
-          const errorMessage = twilioError.message || "Unknown Twilio error";
           updateCallStatus(
-            `error: ${errorMessage}${
-              twilioError.code ? ` (Error code: ${twilioError.code})` : ""
-            }`
+            `error: ${twilioError.message || "Unknown Twilio error"}`
           );
         });
         device.on("incoming", (incomingCall: Call) => {
           activeCallRef.current = incomingCall;
-          updateCallStatus("incoming");
+          updateCallStatus("pending");
           setupCallListeners(incomingCall);
         });
 
@@ -164,9 +132,7 @@ export const useTwilioVoice = () => {
       } catch (error) {
         setError(
           `Twilio error: ${
-            error instanceof Error
-              ? error.message
-              : "Failed to initialize Twilio service"
+            error instanceof Error ? error.message : "Failed to initialize"
           }`
         );
         setCallStatus("error");
@@ -193,14 +159,13 @@ export const useTwilioVoice = () => {
     [identity, setupCallListeners, updateCallStatus, handleError]
   );
 
-  // Call control functions
   const answerCall = useCallback(
-    () => checkActiveCall("No active incoming call").accept(),
+    () => checkActiveCall().accept(),
     [checkActiveCall]
   );
 
   const rejectCall = useCallback(() => {
-    const call = checkActiveCall("No active incoming call");
+    const call = checkActiveCall();
     call.reject();
     activeCallRef.current = null;
   }, [checkActiveCall]);
@@ -228,7 +193,6 @@ export const useTwilioVoice = () => {
     }
   }, []);
 
-  // Cleanup on unmount
   useEffect(() => () => destroy(), [destroy]);
 
   return {
