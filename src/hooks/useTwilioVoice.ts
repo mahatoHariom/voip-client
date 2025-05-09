@@ -34,31 +34,55 @@ enum Codec {
 }
 
 export const useTwilioVoice = () => {
-  const [identity, setIdentity] = useState<string>("");
-  const [callStatus, setCallStatus] = useState<CallStatus>("closed");
-  const [error, setError] = useState<string>("");
-  const [isMuted, setIsMuted] = useState<boolean>(false);
-  const [isInitialized, setIsInitialized] = useState<boolean>(false);
+  const [state, setState] = useState<{
+    identity: string;
+    callStatus: CallStatus;
+    error: string;
+    isMuted: boolean;
+    isInitialized: boolean;
+  }>({
+    identity: "",
+    callStatus: "closed",
+    error: "",
+    isMuted: false,
+    isInitialized: false,
+  });
 
   const deviceRef = useRef<Device | null>(null);
   const activeCallRef = useRef<Call | null>(null);
   const tokenRef = useRef<string>("");
 
+  const updateState = useCallback((updates: Partial<typeof state>) => {
+    setState((prev) => ({ ...prev, ...updates }));
+  }, []);
+
   const handleError = useCallback(
-    (error: unknown, prefix: string) =>
-      `${prefix}: ${error instanceof Error ? error.message : String(error)}`,
-    []
+    (error: unknown, prefix: string) => {
+      const errorMessage = `${prefix}: ${
+        error instanceof Error ? error.message : String(error)
+      }`;
+      updateState({ error: errorMessage, callStatus: "error" });
+      return errorMessage;
+    },
+    [updateState]
   );
 
-  const updateCallStatus = useCallback((status: string) => {
-    if (status.startsWith("error:")) {
-      setError(status.substring(7));
-      setCallStatus("error");
-    } else {
-      setCallStatus(status as CallStatus);
-      if (status === "ready") setError("");
-    }
-  }, []);
+  const updateCallStatus = useCallback(
+    (status: string) => {
+      if (status.startsWith("error:")) {
+        updateState({
+          error: status.substring(7),
+          callStatus: "error",
+        });
+      } else {
+        updateState({
+          callStatus: status as CallStatus,
+          ...(status === "ready" ? { error: "" } : {}),
+        });
+      }
+    },
+    [updateState]
+  );
 
   const checkActiveCall = useCallback(() => {
     if (!activeCallRef.current) throw new Error("No active call");
@@ -73,10 +97,14 @@ export const useTwilioVoice = () => {
         });
         return data;
       } catch (error) {
-        throw new Error(handleError(error, "Failed to fetch token"));
+        throw new Error(
+          `Failed to fetch token: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        );
       }
     },
-    [handleError]
+    []
   );
 
   const setupCallListeners = useCallback(
@@ -89,17 +117,20 @@ export const useTwilioVoice = () => {
         twilioCall.on(event as "disconnect" | "cancel" | "reject", () => {
           activeCallRef.current = null;
           updateCallStatus("closed");
+          updateState({ isMuted: false });
         });
       });
     },
-    [updateCallStatus]
+    [updateCallStatus, updateState]
   );
 
   const initialize = useCallback(
     async (userIdentity: string) => {
-      setIdentity(userIdentity);
-      setError("");
-      setCallStatus("initializing");
+      updateState({
+        identity: userIdentity,
+        error: "",
+        callStatus: "initializing",
+      });
 
       try {
         const { token } = await getToken(userIdentity);
@@ -127,18 +158,19 @@ export const useTwilioVoice = () => {
         });
 
         device.register();
-        setIsInitialized(true);
+        updateState({ isInitialized: true });
       } catch (error) {
-        setError(
-          `Twilio error: ${
-            error instanceof Error ? error.message : "Failed to initialize"
-          }`
-        );
-        setCallStatus("error");
-        setIsInitialized(false);
+        const errorMsg = `Twilio error: ${
+          error instanceof Error ? error.message : "Failed to initialize"
+        }`;
+        updateState({
+          error: errorMsg,
+          callStatus: "error",
+          isInitialized: false,
+        });
       }
     },
-    [getToken, setupCallListeners, updateCallStatus]
+    [getToken, setupCallListeners, updateCallStatus, updateState]
   );
 
   const makeCall = useCallback(
@@ -147,66 +179,83 @@ export const useTwilioVoice = () => {
 
       try {
         activeCallRef.current = await deviceRef.current.connect({
-          params: { To: to, From: identity },
+          params: { To: to, From: state.identity },
         });
         setupCallListeners(activeCallRef.current);
+
         updateCallStatus("connecting");
       } catch (error) {
-        throw new Error(handleError(error, "Failed to initiate call"));
+        throw new Error(
+          `Failed to initiate call: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        );
       }
     },
-    [identity, setupCallListeners, updateCallStatus, handleError]
+    [state.identity, setupCallListeners, updateCallStatus]
   );
 
-  const answerCall = useCallback(
-    () => checkActiveCall().accept(),
-    [checkActiveCall]
-  );
+  const answerCall = useCallback(() => {
+    try {
+      checkActiveCall().accept();
+    } catch (error) {
+      handleError(error, "Failed to answer call");
+    }
+  }, [checkActiveCall, handleError]);
 
   const rejectCall = useCallback(() => {
-    const call = checkActiveCall();
-    call.reject();
-    activeCallRef.current = null;
-  }, [checkActiveCall]);
+    try {
+      const call = checkActiveCall();
+      call.reject();
+      activeCallRef.current = null;
+    } catch (error) {
+      handleError(error, "Failed to reject call");
+    }
+  }, [checkActiveCall, handleError]);
 
   const endCall = useCallback(() => {
-    const call = checkActiveCall();
-    call.disconnect();
-    activeCallRef.current = null;
-  }, [checkActiveCall]);
+    try {
+      const call = checkActiveCall();
+      call.disconnect();
+      activeCallRef.current = null;
+    } catch (error) {
+      handleError(error, "Failed to end call");
+    }
+  }, [checkActiveCall, handleError]);
 
-  const mute = useCallback(() => {
-    checkActiveCall().mute(true);
-    setIsMuted(true);
-  }, [checkActiveCall]);
-
-  const unmute = useCallback(() => {
-    checkActiveCall().mute(false);
-    setIsMuted(false);
-  }, [checkActiveCall]);
+  const toggleMute = useCallback(() => {
+    try {
+      const call = checkActiveCall();
+      const newMuteState = !state.isMuted;
+      call.mute(newMuteState);
+      updateState({ isMuted: newMuteState });
+    } catch (error) {
+      handleError(error, "Failed to toggle mute");
+    }
+  }, [checkActiveCall, handleError, state.isMuted, updateState]);
 
   const destroy = useCallback(() => {
     if (deviceRef.current) {
       deviceRef.current.destroy();
       deviceRef.current = null;
+      updateState({
+        callStatus: "closed",
+        isInitialized: false,
+        isMuted: false,
+      });
     }
-  }, []);
+  }, [updateState]);
 
   useEffect(() => () => destroy(), [destroy]);
 
   return {
-    identity,
-    callStatus,
-    error,
-    isMuted,
-    isInitialized,
+    ...state,
     initialize,
     makeCall,
     answerCall,
     rejectCall,
     endCall,
-    mute,
-    unmute,
+    toggleMute,
     destroy,
   };
 };
