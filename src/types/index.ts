@@ -5,6 +5,8 @@ export type CallStatus =
 | "pending"
 | "reconnecting"
 | "ringing"
+
+// custom for the device state
 | "initializing"
 | "ready"
 | "error";

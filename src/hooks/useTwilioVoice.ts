@@ -1,7 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { Device, Call } from "@twilio/voice-sdk";
-import axios from "axios";
-import { config } from "../config/env";
+import apiClient from "../utils/apiClient";
 import type { CallStatus } from "../types";
 
 interface TokenResponse {
@@ -69,7 +68,7 @@ export const useTwilioVoice = () => {
   const getToken = useCallback(
     async (userIdentity: string): Promise<TokenResponse> => {
       try {
-        const { data } = await axios.post(`${config.api.baseUrl}/token`, {
+        const { data } = await apiClient.post("/token", {
           identity: userIdentity,
         });
         return data;
