@@ -1,16 +1,19 @@
 import { useState, useEffect } from "react";
 import { useTwilioVoice } from "../hooks/useTwilioVoice";
 
-// Common button styles to reduce repetition
+// Common button styles for consistency
 const buttonClass =
-  "px-4 py-2 bg-white border border-gray-300 text-black rounded";
+  "px-4 py-2 bg-white border border-gray-300 text-black rounded hover:bg-gray-50";
 const disabledButtonClass =
-  "px-4 py-2 bg-gray-100 border border-gray-300 text-gray-400 rounded";
-const actionButtonClass = "px-4 py-2 rounded text-white";
+  "px-4 py-2 bg-gray-100 border border-gray-300 text-gray-400 rounded cursor-not-allowed";
+const actionButtonClass = "px-4 py-2 rounded text-white font-medium";
 
 const VoipCall = () => {
   const [identityInput, setIdentityInput] = useState<string>("");
   const [destination, setDestination] = useState<string>("");
+  const [callAttempts, setCallAttempts] = useState<number>(0);
+  const [lastCalledDestination, setLastCalledDestination] =
+    useState<string>("");
 
   const {
     identity,
@@ -18,70 +21,48 @@ const VoipCall = () => {
     error,
     isMuted,
     isInitialized,
-    conferenceState,
-    incomingInvite,
+    callInfo,
+    remoteIdentity,
     initialize,
     makeCall,
     answerCall,
     rejectCall,
     endCall,
     toggleMute,
-    acceptConferenceInvite,
-    rejectConferenceInvite,
   } = useTwilioVoice();
 
   // Log state changes for debugging
   useEffect(() => {
     console.log("Call status:", callStatus);
-    console.log("Incoming invite:", incomingInvite);
-  }, [callStatus, incomingInvite]);
+    console.log("Call info:", callInfo);
+    console.log("Remote identity:", remoteIdentity);
+  }, [callStatus, callInfo, remoteIdentity]);
+
+  // Reset call attempts when destination changes
+  useEffect(() => {
+    if (destination !== lastCalledDestination) {
+      setCallAttempts(0);
+    }
+  }, [destination, lastCalledDestination]);
 
   const handleInitialize = async () => {
     if (!identityInput) return;
-    await initialize(identityInput);
+    try {
+      await initialize(identityInput);
+    } catch (error) {
+      console.error("Initialization error:", error);
+    }
   };
 
   const handleMakeCall = async () => {
     if (!destination) return;
     try {
+      setCallAttempts((prev) => prev + 1);
+      setLastCalledDestination(destination);
       await makeCall(destination);
     } catch (error) {
-      console.error(error);
+      console.error("Call error:", error);
     }
-  };
-
-  // Render notification for incoming conference invites (even during an active call)
-  const renderIncomingConferenceNotification = () => {
-    if (!incomingInvite) return null;
-
-    return (
-      <div className="mb-4 p-3 border-2 border-yellow-500 bg-yellow-100 rounded-lg shadow-md animate-pulse">
-        <div className="flex items-center justify-between">
-          <div className="flex-1">
-            <div className="text-lg font-semibold text-yellow-800">
-              Incoming Call
-            </div>
-            <div className="text-md text-yellow-700">
-              {incomingInvite.from} is calling to join your conversation
-            </div>
-          </div>
-          <div className="flex space-x-2">
-            <button
-              className="px-3 py-1 bg-green-500 hover:bg-green-600 text-white rounded-md"
-              onClick={acceptConferenceInvite}
-            >
-              Accept
-            </button>
-            <button
-              className="px-3 py-1 bg-red-500 hover:bg-red-600 text-white rounded-md"
-              onClick={rejectConferenceInvite}
-            >
-              Reject
-            </button>
-          </div>
-        </div>
-      </div>
-    );
   };
 
   const renderClientInitializer = () => (
@@ -109,96 +90,56 @@ const VoipCall = () => {
     </div>
   );
 
-  const renderIncomingConferenceInvite = () => {
-    if (!incomingInvite) return null;
-
-    return (
-      <div className="mb-4 p-4 border border-yellow-200 bg-yellow-50 rounded">
-        <div className="mb-2 font-medium">
-          {incomingInvite.from} is calling you to join a conference
-        </div>
-        <div className="flex space-x-4">
-          <button
-            className={`${actionButtonClass} bg-green-500 hover:bg-green-600`}
-            onClick={acceptConferenceInvite}
-          >
-            Accept
-          </button>
-          <button
-            className={`${actionButtonClass} bg-red-500 hover:bg-red-600`}
-            onClick={rejectConferenceInvite}
-          >
-            Reject
-          </button>
-        </div>
-      </div>
-    );
-  };
-
-  const renderConferenceParticipants = () => {
-    if (
-      !conferenceState.isConference ||
-      conferenceState.participants.length === 0
-    )
-      return null;
-
-    return (
-      <div className="mb-4 p-2 border border-blue-200 bg-blue-50 rounded">
-        <div className="text-sm font-medium mb-1">Conference Participants:</div>
-        <ul className="list-disc pl-5">
-          {conferenceState.participants.map((participant) => (
-            <li key={participant.identity}>{participant.identity}</li>
-          ))}
-        </ul>
-      </div>
-    );
-  };
-
   const renderCallControls = () => {
-    const isConference = callStatus === "conference";
-
-    // Always show incoming conference invites if present
-    if (incomingInvite && !["open", "conference"].includes(callStatus)) {
-      return (
-        <div className="flex flex-col">{renderIncomingConferenceInvite()}</div>
-      );
-    }
-
     switch (callStatus) {
       case "pending":
         return (
-          <div className="flex space-x-4 mt-4">
-            <button
-              className={`${actionButtonClass} bg-green-500 hover:bg-green-600`}
-              onClick={answerCall}
-            >
-              Answer
-            </button>
-            <button
-              className={`${actionButtonClass} bg-red-500 hover:bg-red-600`}
-              onClick={rejectCall}
-            >
-              Reject
-            </button>
+          <div className="flex flex-col items-center mt-4">
+            <div className="text-center mb-4 font-medium">
+              Incoming call...
+              {callInfo && (
+                <div className="text-sm text-gray-500 mt-1">{callInfo}</div>
+              )}
+            </div>
+            <div className="flex space-x-4">
+              <button
+                className={`${actionButtonClass} bg-green-500 hover:bg-green-600`}
+                onClick={answerCall}
+              >
+                Answer
+              </button>
+              <button
+                className={`${actionButtonClass} bg-red-500 hover:bg-red-600`}
+                onClick={rejectCall}
+              >
+                Reject
+              </button>
+            </div>
           </div>
         );
 
       case "open":
       case "connecting":
-      case "conference":
+      case "reconnecting":
         return (
           <div className="flex flex-col items-center mt-4">
             <div className="text-center mb-2">
               {callStatus === "connecting" ? (
-                <div>Connecting...</div>
-              ) : isConference ? (
-                <div className="font-medium">In Conference Call</div>
+                <div className="font-medium">Connecting...</div>
+              ) : callStatus === "reconnecting" ? (
+                <div className="font-medium text-yellow-600">
+                  Reconnecting...
+                </div>
               ) : (
-                <div>In Call with {destination}</div>
+                <div className="font-medium">
+                  In Call with {remoteIdentity || "..."}
+                </div>
+              )}
+
+              {callInfo && (
+                <div className="text-xs text-gray-500 mt-1">{callInfo}</div>
               )}
             </div>
-
-            {renderConferenceParticipants()}
 
             <div className="flex space-x-4">
               <button
@@ -207,7 +148,10 @@ const VoipCall = () => {
               >
                 End Call
               </button>
-              <button className={buttonClass} onClick={toggleMute}>
+              <button
+                className={`${buttonClass} ${isMuted ? "bg-yellow-50" : ""}`}
+                onClick={toggleMute}
+              >
                 {isMuted ? "Unmute" : "Mute"}
               </button>
             </div>
@@ -217,7 +161,6 @@ const VoipCall = () => {
       case "ready":
       case "closed":
       case "ringing":
-      case "reconnecting":
         return (
           <div className="mt-4">
             <div className="flex flex-col">
@@ -244,6 +187,18 @@ const VoipCall = () => {
                   Call
                 </button>
               </div>
+              {callInfo && callStatus === "closed" ? (
+                <div className="mt-2 text-sm text-gray-600">{callInfo}</div>
+              ) : (
+                callAttempts > 0 &&
+                callStatus === "closed" &&
+                destination === lastCalledDestination && (
+                  <div className="mt-2 text-sm text-red-600">
+                    Call attempt failed. Please check that the destination
+                    client is online and try again.
+                  </div>
+                )
+              )}
             </div>
           </div>
         );
@@ -254,43 +209,67 @@ const VoipCall = () => {
   };
 
   const StatusIndicator = () => (
-    <div className="mb-4 p-2 border border-gray-200 bg-gray-50">
-      <div className="flex justify-between items-center">
-        <span className="text-gray-600 text-sm">Status:</span>
-        <span>{callStatus}</span>
-      </div>
+    <div
+      className={`px-2 py-1 rounded-full text-xs font-medium inline-flex items-center ${
+        callStatus === "ready"
+          ? "bg-green-100 text-green-800"
+          : callStatus === "error"
+          ? "bg-red-100 text-red-800"
+          : callStatus === "open"
+          ? "bg-blue-100 text-blue-800"
+          : callStatus === "connecting"
+          ? "bg-blue-100 text-blue-800"
+          : callStatus === "reconnecting"
+          ? "bg-yellow-100 text-yellow-800"
+          : callStatus === "pending"
+          ? "bg-yellow-100 text-yellow-800"
+          : "bg-gray-100 text-gray-800"
+      }`}
+    >
+      <span
+        className={`w-2 h-2 rounded-full mr-1 ${
+          callStatus === "ready"
+            ? "bg-green-500"
+            : callStatus === "error"
+            ? "bg-red-500"
+            : callStatus === "open"
+            ? "bg-blue-500"
+            : callStatus === "connecting"
+            ? "bg-blue-500 animate-pulse"
+            : callStatus === "reconnecting"
+            ? "bg-yellow-500 animate-pulse"
+            : callStatus === "pending"
+            ? "bg-yellow-500"
+            : "bg-gray-500"
+        }`}
+      ></span>
+      {callStatus}
     </div>
   );
 
   return (
-    <div className="max-w-md mx-auto bg-white p-6 border border-gray-200 rounded">
-      <h2 className="text-xl font-bold mb-4 text-center">VOIP Client</h2>
-
-      {/* Always show incoming conference notifications at the top if they exist */}
-      {isInitialized &&
-        incomingInvite &&
-        ["open", "conference"].includes(callStatus) &&
-        renderIncomingConferenceNotification()}
-
-      {!isInitialized ? (
-        renderClientInitializer()
-      ) : (
-        <div className="mb-4 p-2 border border-gray-200 bg-gray-50">
-          <div className="flex justify-between items-center">
-            <span className="text-gray-600 text-sm">Identity:</span>
-            <span className="text-gray-800">{identity}</span>
-          </div>
-        </div>
-      )}
+    <div className="max-w-md mx-auto p-4 bg-white rounded-lg shadow-md">
+      <div className="mb-4 flex justify-between items-center">
+        <h2 className="text-xl font-semibold">Simple VoIP Call</h2>
+        <StatusIndicator />
+      </div>
 
       {error && (
-        <div className="mb-4 p-2 border border-red-200 bg-red-50 text-red-600">
+        <div className="mb-4 p-3 bg-red-100 border border-red-300 text-red-700 rounded">
           {error}
         </div>
       )}
 
-      <StatusIndicator />
-      {renderCallControls()}
+      {!isInitialized ? renderClientInitializer() : null}
+
+      {isInitialized && (
+        <div className="mb-2">
+          <div className="text-sm text-gray-500">Logged in as:</div>
+          <div className="font-medium">{identity}</div>
+        </div>
+      )}
+
+      {isInitialized && renderCallControls()}
     </div>
   );
 };

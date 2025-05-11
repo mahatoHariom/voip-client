@@ -5,8 +5,6 @@ export type CallStatus =
   | "pending"
   | "reconnecting"
   | "ringing"
-  | "conference" // When in a conference call with multiple participants
-  | "incoming_conference_request" // When someone is trying to join your call
 
   // custom for the device state
   | "initializing"

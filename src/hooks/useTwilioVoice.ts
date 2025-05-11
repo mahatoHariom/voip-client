@@ -1,44 +1,38 @@
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useRef } from "react";
 import { Device, Call } from "@twilio/voice-sdk";
 import apiClient from "../utils/apiClient";
-import type { CallStatus, ConferenceState, CallParticipant } from "../types";
+import type { CallStatus } from "../types";
 
 interface TokenResponse {
   token: string;
   identity: string;
 }
 
-interface TwilioError extends Error {
-  code?: number | string;
+// Define a more specific type for Twilio Call that includes the 'on' method
+interface TwilioCall extends Call {
+  on(
+    event:
+      | "accept"
+      | "disconnect"
+      | "cancel"
+      | "reject"
+      | "error"
+      | "warning"
+      | "reconnecting"
+      | "reconnected",
+    listener: (arg?: unknown) => void
+  ): this;
+  parameters: Record<string, string>;
 }
 
+// Add proper type for Device with event handlers
 interface TwilioDevice extends Device {
   on(
     event: "registered" | "unregistered" | "tokenWillExpire" | "tokenExpired",
     listener: () => void
   ): this;
-  on(event: "error", listener: (error: TwilioError) => void): this;
+  on(event: "error", listener: (error: Error) => void): this;
   on(event: "incoming", listener: (call: Call) => void): this;
-}
-
-// Define a more specific type for Twilio Call that includes the 'on' method
-interface TwilioCall extends Call {
-  on(
-    event: "accept" | "disconnect" | "cancel" | "reject",
-    listener: () => void
-  ): this;
-  customParameters: Map<string, string>;
-}
-
-interface IncomingInvite {
-  inviteId: string;
-  from: string;
-  to: string;
-}
-
-enum Codec {
-  Opus = "opus",
-  PCMU = "pcmu",
 }
 
 export const useTwilioVoice = () => {
@@ -48,26 +42,58 @@ export const useTwilioVoice = () => {
     error: string;
     isMuted: boolean;
     isInitialized: boolean;
-    conferenceState: ConferenceState;
-    incomingInvite: IncomingInvite | null;
+    callInfo: string;
+    remoteIdentity: string;
   }>({
     identity: "",
     callStatus: "closed",
     error: "",
     isMuted: false,
     isInitialized: false,
-    conferenceState: {
-      isConference: false,
-      participants: [],
-      pendingInvites: [],
-    },
-    incomingInvite: null,
+    callInfo: "",
+    remoteIdentity: "",
   });
 
-  const deviceRef = useRef<Device | null>(null);
+  const deviceRef = useRef<TwilioDevice | null>(null);
   const activeCallRef = useRef<TwilioCall | null>(null);
-  const callParamsRef = useRef<Record<string, string>>({});
   const tokenRef = useRef<string>("");
+
+  // Enhanced function to properly clean up call resources
+  const cleanupCallResources = useCallback(() => {
+    if (activeCallRef.current) {
+      try {
+        console.log("Cleaning up call resources");
+
+        // Make sure the call is properly disconnected
+        if (activeCallRef.current.status() !== "closed") {
+          activeCallRef.current.disconnect();
+        }
+
+        // Force release of audio resources
+        if (deviceRef.current) {
+          try {
+            // Attempt to release audio resources
+            deviceRef.current.audio?.outgoing(false);
+            deviceRef.current.audio?.incoming(false);
+
+            // Additional cleanup for any active audio elements
+            console.log("Audio resources released");
+          } catch (err) {
+            console.warn("Error releasing device audio:", err);
+          }
+        }
+      } catch (err) {
+        // Ignore errors during cleanup
+        console.log("Error during call cleanup:", err);
+      }
+
+      // Clear the active call reference
+      activeCallRef.current = null;
+    }
+
+    // Reset mute state and remote identity
+    updateState({ isMuted: false, remoteIdentity: "" });
+  }, []);
 
   const updateState = useCallback((updates: Partial<typeof state>) => {
     setState((prev) => ({ ...prev, ...updates }));
@@ -78,6 +104,7 @@ export const useTwilioVoice = () => {
       const errorMessage = `${prefix}: ${
         error instanceof Error ? error.message : String(error)
       }`;
+      console.error(errorMessage);
       updateState({ error: errorMessage, callStatus: "error" });
       return errorMessage;
     },
@@ -85,18 +112,12 @@ export const useTwilioVoice = () => {
   );
 
   const updateCallStatus = useCallback(
-    (status: string) => {
-      if (status.startsWith("error:")) {
-        updateState({
-          error: status.substring(7),
-          callStatus: "error",
-        });
-      } else {
-        updateState({
-          callStatus: status as CallStatus,
-          ...(status === "ready" ? { error: "" } : {}),
-        });
-      }
+    (status: CallStatus, info: string = "") => {
+      updateState({
+        callStatus: status,
+        callInfo: info,
+        ...(status === "ready" ? { error: "" } : {}),
+      });
     },
     [updateState]
   );
@@ -124,121 +145,71 @@ export const useTwilioVoice = () => {
     []
   );
 
-  const setupCallListeners = useCallback(
-    (call: TwilioCall, customParams?: Record<string, string>) => {
-      // Store custom parameters
-      if (customParams) {
-        callParamsRef.current = customParams;
+  // Helper function to extract client identity from Twilio parameters
+  const extractClientIdentity = useCallback(
+    (parameters: Record<string, string>) => {
+      // Extract the caller's identity from the From parameter
+      // Format is typically "client:identity"
+      const from = parameters.From || "";
+      if (from.startsWith("client:")) {
+        return from.substring(7); // Remove "client:" prefix
       }
+      return from || "unknown";
+    },
+    []
+  );
 
+  const setupCallListeners = useCallback(
+    (call: TwilioCall) => {
+      // Call accepted
       call.on("accept", () => {
-        // Use our stored parameters or get them from the call if available
-        const params = callParamsRef.current || {};
-        const isConference = params.isConference === "true";
-
-        if (isConference) {
-          // This is a conference call
-          const participantsString = params.participants || "";
-          const participants: CallParticipant[] = participantsString
-            ? JSON.parse(participantsString)
-            : [];
-
-          updateState({
-            callStatus: "conference",
-            conferenceState: {
-              isConference: true,
-              participants,
-              pendingInvites: [],
-            },
-          });
-        } else {
-          // This is a regular 1:1 call
-          updateCallStatus("open");
-
-          // Reset conference state for normal calls
-          updateState({
-            conferenceState: {
-              isConference: false,
-              participants: [],
-              pendingInvites: [],
-            },
-          });
-        }
+        console.log("Call accepted");
+        updateCallStatus("open");
       });
 
+      // Call error
+      call.on("error", (error) => {
+        console.error("Call error:", error);
+        handleError(error, "Call error");
+        cleanupCallResources();
+      });
+
+      // Call warning
+      call.on("warning", (warning) => {
+        console.warn("Call warning:", warning);
+        updateState({ callInfo: `Warning: ${warning}` });
+      });
+
+      // Call reconnecting
+      call.on("reconnecting", (error) => {
+        console.warn("Call reconnecting due to:", error);
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        updateCallStatus("reconnecting", `Reconnecting: ${errorMsg}`);
+      });
+
+      // Call reconnected
+      call.on("reconnected", () => {
+        console.log("Call reconnected successfully");
+        updateCallStatus("open", "Reconnected");
+      });
+
+      // Call ended
       ["disconnect", "cancel", "reject"].forEach((event) => {
         call.on(event as "disconnect" | "cancel" | "reject", () => {
-          activeCallRef.current = null;
-          callParamsRef.current = {};
-          updateCallStatus("closed");
-          updateState({
-            isMuted: false,
-            conferenceState: {
-              isConference: false,
-              participants: [],
-              pendingInvites: [],
-            },
-          });
+          console.log(`Call ${event} event received`);
+
+          // First update the status to ensure UI reflects the change
+          updateCallStatus(
+            "closed",
+            event === "disconnect" ? "Call ended" : "Call rejected"
+          );
+
+          // Then clean up resources
+          cleanupCallResources();
         });
       });
     },
-    [updateCallStatus, updateState]
-  );
-
-  const handleIncomingConferenceInvite = useCallback(
-    (invite: IncomingInvite) => {
-      console.log("Received incoming conference invite:", invite);
-
-      // Always show the conference invite UI regardless of current call status
-      updateState({
-        incomingInvite: invite,
-      });
-
-      // Sound notification for incoming conference call
-      // We'll create a simple notification sound using Web Audio API
-      try {
-        // Use proper type for AudioContext
-        const AudioContextClass =
-          window.AudioContext ||
-          (window as unknown as { webkitAudioContext: typeof AudioContext })
-            .webkitAudioContext;
-        const audioContext = new AudioContextClass();
-
-        // Create oscillator for notification sound
-        const oscillator = audioContext.createOscillator();
-        const gainNode = audioContext.createGain();
-
-        oscillator.type = "sine";
-        oscillator.frequency.setValueAtTime(440, audioContext.currentTime); // A4 note
-
-        // Control volume
-        gainNode.gain.setValueAtTime(0.1, audioContext.currentTime);
-        gainNode.gain.exponentialRampToValueAtTime(
-          0.01,
-          audioContext.currentTime + 1
-        );
-
-        // Connect nodes
-        oscillator.connect(gainNode);
-        gainNode.connect(audioContext.destination);
-
-        // Play sound
-        oscillator.start();
-        oscillator.stop(audioContext.currentTime + 1); // Stop after 1 second
-
-        console.log(
-          "Playing notification sound for incoming conference invite"
-        );
-
-        // Vibrate if supported on mobile
-        if ("vibrate" in navigator) {
-          navigator.vibrate([200, 100, 200]);
-        }
-      } catch (err) {
-        console.log("Could not play notification sound", err);
-      }
-    },
-    [updateState]
+    [updateCallStatus, updateState, handleError, cleanupCallResources]
   );
 
   const initialize = useCallback(
@@ -250,59 +221,67 @@ export const useTwilioVoice = () => {
       });
 
       try {
+        // Clean up existing device if any
+        if (deviceRef.current) {
+          console.log("Destroying existing device");
+          deviceRef.current.destroy();
+          deviceRef.current = null;
+        }
+
+        // Clean up any existing call
+        cleanupCallResources();
+
+        // Get token from server
         const { token } = await getToken(userIdentity);
         tokenRef.current = token;
 
-        deviceRef.current = new Device(token, {
-          codecPreferences: [Codec.Opus, Codec.PCMU] as Codec[],
-          logLevel: "error",
+        // Create new device with audio constraints to improve quality
+        const device = new Device(token, {
+          logLevel: "warn",
+        }) as TwilioDevice;
+
+        deviceRef.current = device;
+
+        // Set up device event listeners
+        device.on("registered", () => {
+          console.log("Device registered successfully");
+          updateCallStatus("ready");
         });
 
-        const device = deviceRef.current as TwilioDevice;
-
-        device.on("registered", () => updateCallStatus("ready"));
-        device.on("unregistered", () => updateCallStatus("closed"));
-        device.on("tokenExpired", () => updateCallStatus("closed"));
-        device.on("error", (twilioError: TwilioError) => {
-          updateCallStatus(
-            `error: ${twilioError.message || "Unknown Twilio error"}`
-          );
+        device.on("error", (error: Error) => {
+          console.error("Device error:", error);
+          updateCallStatus("error", `Error: ${error.message}`);
         });
+
         device.on("incoming", (incomingCall: Call) => {
-          // Get the call as a TwilioCall to access the on method
-          const twilioCall = incomingCall as TwilioCall;
+          console.log("Incoming call received");
 
-          // Check if this is a conference invite or regular call
-          const params =
-            twilioCall.customParameters || new Map<string, string>();
-          const customParams: Record<string, string> = {};
+          // Clean up any existing call first
+          cleanupCallResources();
 
-          // Convert Map to Record
-          params.forEach((value, key) => {
-            customParams[key] = value;
-          });
+          activeCallRef.current = incomingCall as TwilioCall;
 
-          if (customParams.inviteId) {
-            // This is a conference invite
-            handleIncomingConferenceInvite({
-              inviteId: customParams.inviteId,
-              from: customParams.from || "unknown",
-              to: userIdentity,
-            });
-          } else {
-            // Regular incoming call
-            activeCallRef.current = twilioCall;
-            updateCallStatus("pending");
-            setupCallListeners(twilioCall, customParams);
-          }
+          // Extract caller identity from parameters
+          const callerIdentity = extractClientIdentity(
+            (incomingCall as TwilioCall).parameters
+          );
+          console.log("Incoming call from:", callerIdentity);
+
+          // Store the caller's identity
+          updateState({ remoteIdentity: callerIdentity });
+
+          updateCallStatus("pending", `From: ${callerIdentity}`);
+          setupCallListeners(activeCallRef.current);
         });
 
-        device.register();
+        // Register the device
+        await device.register();
         updateState({ isInitialized: true });
       } catch (error) {
-        const errorMsg = `Twilio error: ${
-          error instanceof Error ? error.message : "Failed to initialize"
+        const errorMsg = `Initialization error: ${
+          error instanceof Error ? error.message : "Unknown error"
         }`;
+        console.error(errorMsg);
         updateState({
           error: errorMsg,
           callStatus: "error",
@@ -315,20 +294,28 @@ export const useTwilioVoice = () => {
       setupCallListeners,
       updateCallStatus,
       updateState,
-      handleIncomingConferenceInvite,
+      cleanupCallResources,
+      extractClientIdentity,
     ]
   );
 
   const makeCall = useCallback(
     async (to: string) => {
-      if (!deviceRef.current) throw new Error("Twilio device not initialized");
+      if (!deviceRef.current) throw new Error("Device not initialized");
 
       try {
-        console.log(`Making call to: ${to} from: ${state.identity}`);
+        // Clean up any existing call first
+        cleanupCallResources();
 
-        // Make sure 'to' is properly formatted as client:identity
+        console.log(`Making call to: ${to}`);
+
+        // Store the destination identity
+        updateState({ remoteIdentity: to });
+
+        // Format destination
         const formattedTo = to.startsWith("client:") ? to : `client:${to}`;
 
+        // Make the call
         const call = await deviceRef.current.connect({
           params: {
             To: formattedTo,
@@ -336,232 +323,83 @@ export const useTwilioVoice = () => {
           },
         });
 
-        console.log(`Call initiated successfully`);
-
-        // Cast to TwilioCall to get access to the 'on' method
+        // Set up call listeners
         activeCallRef.current = call as TwilioCall;
-        const customParams = {
-          to: formattedTo,
-          from: `client:${state.identity}`,
-        };
-        setupCallListeners(activeCallRef.current, customParams);
-
-        updateCallStatus("connecting");
+        setupCallListeners(activeCallRef.current);
+        updateCallStatus("connecting", `Calling ${to}...`);
       } catch (error) {
         console.error("Call failed:", error);
-        throw new Error(
-          `Failed to initiate call: ${
-            error instanceof Error ? error.message : String(error)
-          }`
-        );
+        handleError(error, "Failed to make call");
+        cleanupCallResources();
       }
     },
-    [state.identity, setupCallListeners, updateCallStatus]
+    [
+      state.identity,
+      setupCallListeners,
+      updateCallStatus,
+      handleError,
+      cleanupCallResources,
+      updateState,
+    ]
   );
 
   const answerCall = useCallback(() => {
     try {
+      console.log("Answering call");
       checkActiveCall().accept();
     } catch (error) {
       handleError(error, "Failed to answer call");
+      cleanupCallResources();
     }
-  }, [checkActiveCall, handleError]);
+  }, [checkActiveCall, handleError, cleanupCallResources]);
 
   const rejectCall = useCallback(() => {
     try {
-      const call = checkActiveCall();
-      call.reject();
-      activeCallRef.current = null;
-      callParamsRef.current = {};
+      console.log("Rejecting call");
+      checkActiveCall().reject();
+      // Let the event handlers handle cleanup
     } catch (error) {
       handleError(error, "Failed to reject call");
+      cleanupCallResources();
     }
-  }, [checkActiveCall, handleError]);
+  }, [checkActiveCall, handleError, cleanupCallResources]);
 
   const endCall = useCallback(() => {
     try {
-      const call = checkActiveCall();
-      call.disconnect();
-      activeCallRef.current = null;
-      callParamsRef.current = {};
+      console.log("Ending call");
+      checkActiveCall().disconnect();
+      // Let the event handlers handle cleanup
     } catch (error) {
       handleError(error, "Failed to end call");
+      cleanupCallResources();
     }
-  }, [checkActiveCall, handleError]);
+  }, [checkActiveCall, handleError, cleanupCallResources]);
 
   const toggleMute = useCallback(() => {
     try {
       const call = checkActiveCall();
       const newMuteState = !state.isMuted;
       call.mute(newMuteState);
+      console.log(`Call ${newMuteState ? "muted" : "unmuted"}`);
       updateState({ isMuted: newMuteState });
     } catch (error) {
       handleError(error, "Failed to toggle mute");
     }
   }, [checkActiveCall, handleError, state.isMuted, updateState]);
 
-  // Accept a conference invite
-  const acceptConferenceInvite = useCallback(async () => {
-    if (!state.incomingInvite) {
-      handleError(
-        new Error("No active conference invite"),
-        "Failed to accept invite"
-      );
-      return;
-    }
-
-    try {
-      if (!deviceRef.current) throw new Error("Twilio device not initialized");
-
-      const { inviteId } = state.incomingInvite;
-      console.log(`Accepting conference invite: ${inviteId}`);
-
-      // Connect to the conference through the Twilio voice response
-      const call = await deviceRef.current.connect({
-        params: {
-          inviteId,
-          action: "accept",
-          From: state.identity,
-        },
-      });
-
-      // Cast to TwilioCall to get access to the 'on' method
-      activeCallRef.current = call as TwilioCall;
-      const customParams = {
-        inviteId,
-        from: state.identity,
-        isConference: "true",
-      };
-      setupCallListeners(activeCallRef.current, customParams);
-      updateCallStatus("connecting");
-
-      // Reset the incoming invite
-      updateState({ incomingInvite: null });
-      console.log("Conference invite accepted");
-    } catch (error) {
-      handleError(error, "Failed to join conference");
-    }
-  }, [
-    state.incomingInvite,
-    state.identity,
-    setupCallListeners,
-    updateCallStatus,
-    updateState,
-    handleError,
-  ]);
-
-  // Reject a conference invite
-  const rejectConferenceInvite = useCallback(async () => {
-    if (!state.incomingInvite) {
-      handleError(
-        new Error("No active conference invite"),
-        "Failed to reject invite"
-      );
-      return;
-    }
-
-    try {
-      const { inviteId } = state.incomingInvite;
-      console.log(`Rejecting conference invite: ${inviteId}`);
-
-      // Send the reject action to the server
-      await apiClient.post("/voice", {
-        inviteId,
-        action: "reject",
-        identity: state.identity,
-      });
-
-      // Reset the incoming invite
-      updateState({
-        incomingInvite: null,
-      });
-      console.log("Conference invite rejected");
-    } catch (error) {
-      handleError(error, "Failed to reject conference invite");
-    }
-  }, [state.incomingInvite, state.identity, updateState, handleError]);
-
-  const destroy = useCallback(() => {
-    if (deviceRef.current) {
-      deviceRef.current.destroy();
-      deviceRef.current = null;
-      updateState({
-        callStatus: "closed",
-        isInitialized: false,
-        isMuted: false,
-      });
-    }
-  }, [updateState]);
-
-  useEffect(() => () => destroy(), [destroy]);
-
-  // Poll for incoming invites
-  const pollForInvites = useCallback(async () => {
-    if (!state.isInitialized || !state.identity) return;
-
-    try {
-      const { data } = await apiClient.get(
-        `/check-invites?identity=${state.identity}`
-      );
-
-      if (data.hasInvites && data.invites.length > 0) {
-        // Take the first invite (we'll handle one at a time)
-        const invite = data.invites[0];
-        console.log(
-          `Received conference invite via polling: ${JSON.stringify(invite)}`
-        );
-
-        // Only update if we don't already have this invite
-        if (
-          !state.incomingInvite ||
-          state.incomingInvite.inviteId !== invite.inviteId
-        ) {
-          console.log("Updating state with new conference invite");
-          handleIncomingConferenceInvite({
-            inviteId: invite.inviteId,
-            from: invite.from,
-            to: invite.to,
-          });
-        }
-      }
-    } catch (error) {
-      console.error("Error polling for invites:", error);
-    }
-  }, [
-    state.isInitialized,
-    state.identity,
-    state.incomingInvite,
-    handleIncomingConferenceInvite,
-  ]);
-
-  // Set up polling interval when initialized
-  useEffect(() => {
-    if (!state.isInitialized) return;
-
-    // Poll immediately on init
-    pollForInvites();
-
-    // Poll more frequently (every 1.5 seconds) when in a call to ensure quick response to join requests
-    const pollInterval = ["open", "conference"].includes(state.callStatus)
-      ? 1500
-      : 3000;
-
-    console.log(`Setting up polling interval: ${pollInterval}ms`);
-    const interval = setInterval(pollForInvites, pollInterval);
-
-    return () => clearInterval(interval);
-  }, [state.isInitialized, state.callStatus, pollForInvites]);
-
   return {
-    ...state,
+    identity: state.identity,
+    callStatus: state.callStatus,
+    error: state.error,
+    isMuted: state.isMuted,
+    isInitialized: state.isInitialized,
+    callInfo: state.callInfo,
+    remoteIdentity: state.remoteIdentity,
     initialize,
     makeCall,
     answerCall,
     rejectCall,
     endCall,
     toggleMute,
-    destroy,
-    acceptConferenceInvite,
-    rejectConferenceInvite,
   };
 };
