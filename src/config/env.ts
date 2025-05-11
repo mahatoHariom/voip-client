@@ -8,10 +8,8 @@ const parseBooleanEnv = (
 
 export const config = {
   api: {
-    useNgrok: parseBooleanEnv(import.meta.env.VITE_USE_NGROK, true),
-    ngrokUrl:
-      import.meta.env.VITE_NGROK_URL ||
-      "https://37af-45-64-161-36.ngrok-free.app",
+    useNgrok: true,
+    ngrokUrl: "https://ae68-43-231-211-233.ngrok-free.app",
     localUrl: import.meta.env.VITE_LOCAL_URL || "http://localhost:9000",
     get baseUrl(): string {
       return this.useNgrok
