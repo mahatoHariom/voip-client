@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import { Device, Call } from "@twilio/voice-sdk";
 import apiClient from "../utils/apiClient";
 import type { CallStatus } from "../types";
@@ -35,6 +35,19 @@ interface TwilioDevice extends Device {
   on(event: "incoming", listener: (call: Call) => void): this;
 }
 
+// Audio settings for better call quality
+const AUDIO_CONSTRAINTS: MediaStreamConstraints = {
+  audio: {
+    echoCancellation: true,
+    noiseSuppression: true,
+    autoGainControl: true,
+  },
+  video: false,
+};
+
+// Token refresh interval in milliseconds (refresh token 1 minute before expiry)
+const TOKEN_REFRESH_INTERVAL = 59 * 60 * 1000; // 59 minutes
+
 export const useTwilioVoice = () => {
   const [state, setState] = useState<{
     identity: string;
@@ -57,6 +70,7 @@ export const useTwilioVoice = () => {
   const deviceRef = useRef<TwilioDevice | null>(null);
   const activeCallRef = useRef<TwilioCall | null>(null);
   const tokenRef = useRef<string>("");
+  const tokenRefreshTimerRef = useRef<number | null>(null);
 
   // Enhanced function to properly clean up call resources
   const cleanupCallResources = useCallback(() => {
@@ -94,6 +108,30 @@ export const useTwilioVoice = () => {
     // Reset mute state and remote identity
     updateState({ isMuted: false, remoteIdentity: "" });
   }, []);
+
+  // Cleanup resources when component unmounts
+  useEffect(() => {
+    return () => {
+      // Clear any token refresh timer
+      if (tokenRefreshTimerRef.current) {
+        window.clearTimeout(tokenRefreshTimerRef.current);
+        tokenRefreshTimerRef.current = null;
+      }
+
+      // Clean up call resources
+      cleanupCallResources();
+
+      // Destroy device if it exists
+      if (deviceRef.current) {
+        try {
+          deviceRef.current.destroy();
+          deviceRef.current = null;
+        } catch (err) {
+          console.warn("Error destroying device:", err);
+        }
+      }
+    };
+  }, [cleanupCallResources]);
 
   const updateState = useCallback((updates: Partial<typeof state>) => {
     setState((prev) => ({ ...prev, ...updates }));
@@ -143,6 +181,41 @@ export const useTwilioVoice = () => {
       }
     },
     []
+  );
+
+  // Setup token refresh mechanism
+  const setupTokenRefresh = useCallback(
+    (identity: string) => {
+      // Clear any existing timer
+      if (tokenRefreshTimerRef.current) {
+        window.clearTimeout(tokenRefreshTimerRef.current);
+      }
+
+      // Set up a timer to refresh the token before it expires
+      tokenRefreshTimerRef.current = window.setTimeout(async () => {
+        try {
+          console.log("Refreshing Twilio token...");
+          const { token } = await getToken(identity);
+          tokenRef.current = token;
+
+          // Update the device with the new token
+          if (deviceRef.current) {
+            await deviceRef.current.updateToken(token);
+            console.log("Token refreshed successfully");
+          }
+
+          // Set up the next refresh
+          setupTokenRefresh(identity);
+        } catch (error) {
+          console.error("Failed to refresh token:", error);
+          // Try again in 1 minute if failed
+          tokenRefreshTimerRef.current = window.setTimeout(() => {
+            setupTokenRefresh(identity);
+          }, 60000);
+        }
+      }, TOKEN_REFRESH_INTERVAL);
+    },
+    [getToken]
   );
 
   // Helper function to extract client identity from Twilio parameters
@@ -235,9 +308,10 @@ export const useTwilioVoice = () => {
         const { token } = await getToken(userIdentity);
         tokenRef.current = token;
 
-        // Create new device with audio constraints to improve quality
+        // Create new device with improved settings
         const device = new Device(token, {
           logLevel: "warn",
+          maxAverageBitrate: 16000, // Set max bitrate for better audio quality
         }) as TwilioDevice;
 
         deviceRef.current = device;
@@ -274,6 +348,9 @@ export const useTwilioVoice = () => {
           setupCallListeners(activeCallRef.current);
         });
 
+        // Set up token refresh
+        setupTokenRefresh(userIdentity);
+
         // Register the device
         await device.register();
         updateState({ isInitialized: true });
@@ -296,6 +373,7 @@ export const useTwilioVoice = () => {
       updateState,
       cleanupCallResources,
       extractClientIdentity,
+      setupTokenRefresh,
     ]
   );
 
@@ -315,11 +393,20 @@ export const useTwilioVoice = () => {
         // Format destination
         const formattedTo = to.startsWith("client:") ? to : `client:${to}`;
 
-        // Make the call
+        // Make the call with improved settings
         const call = await deviceRef.current.connect({
           params: {
             To: formattedTo,
             From: `client:${state.identity}`,
+            // Add status callback URL for better call monitoring
+            StatusCallback: `${apiClient.defaults.baseURL}/status`,
+            StatusCallbackEvent: [
+              "initiated",
+              "ringing",
+              "answered",
+              "completed",
+            ].join(" "),
+            StatusCallbackMethod: "POST",
           },
         });
 
@@ -346,6 +433,8 @@ export const useTwilioVoice = () => {
   const answerCall = useCallback(() => {
     try {
       console.log("Answering call");
+
+      // Accept the call
       checkActiveCall().accept();
     } catch (error) {
       handleError(error, "Failed to answer call");
