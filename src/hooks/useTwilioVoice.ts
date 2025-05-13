@@ -35,16 +35,6 @@ interface TwilioDevice extends Device {
   on(event: "incoming", listener: (call: Call) => void): this;
 }
 
-// Audio settings for better call quality
-const AUDIO_CONSTRAINTS: MediaStreamConstraints = {
-  audio: {
-    echoCancellation: true,
-    noiseSuppression: true,
-    autoGainControl: true,
-  },
-  video: false,
-};
-
 // Token refresh interval in milliseconds (refresh token 1 minute before expiry)
 const TOKEN_REFRESH_INTERVAL = 59 * 60 * 1000; // 59 minutes
 
@@ -378,20 +368,26 @@ export const useTwilioVoice = () => {
   );
 
   const makeCall = useCallback(
-    async (to: string) => {
+    async (to: string, callType: "direct" | "conference" = "direct") => {
       if (!deviceRef.current) throw new Error("Device not initialized");
 
       try {
         // Clean up any existing call first
         cleanupCallResources();
 
-        console.log(`Making call to: ${to}`);
+        console.log(`Making ${callType} call to: ${to}`);
 
         // Store the destination identity
         updateState({ remoteIdentity: to });
 
-        // Format destination
-        const formattedTo = to.startsWith("client:") ? to : `client:${to}`;
+        // Format destination based on call type
+        let formattedTo;
+        if (callType === "conference") {
+          formattedTo = `conference:${to}`;
+        } else {
+          // Direct call
+          formattedTo = to.startsWith("client:") ? to : `client:${to}`;
+        }
 
         // Make the call with improved settings
         const call = await deviceRef.current.connect({
@@ -413,7 +409,13 @@ export const useTwilioVoice = () => {
         // Set up call listeners
         activeCallRef.current = call as TwilioCall;
         setupCallListeners(activeCallRef.current);
-        updateCallStatus("connecting", `Calling ${to}...`);
+
+        // Update call status with the appropriate message
+        if (callType === "conference") {
+          updateCallStatus("connecting", `Joining conference ${to}...`);
+        } else {
+          updateCallStatus("connecting", `Calling ${to}...`);
+        }
       } catch (error) {
         console.error("Call failed:", error);
         handleError(error, "Failed to make call");
@@ -476,6 +478,25 @@ export const useTwilioVoice = () => {
     }
   }, [checkActiveCall, handleError, state.isMuted, updateState]);
 
+  // Fetch available conferences
+  const fetchConferences = useCallback(async () => {
+    try {
+      const { data } = await apiClient.get("/conferences");
+      return data.conferences || [];
+    } catch (error) {
+      console.error("Error fetching conferences:", error);
+      return [];
+    }
+  }, []);
+
+  // Join a specific conference
+  const joinConference = useCallback(
+    (conferenceName: string) => {
+      return makeCall(conferenceName, "conference");
+    },
+    [makeCall]
+  );
+
   return {
     identity: state.identity,
     callStatus: state.callStatus,
@@ -490,5 +511,7 @@ export const useTwilioVoice = () => {
     rejectCall,
     endCall,
     toggleMute,
+    fetchConferences,
+    joinConference,
   };
 };
