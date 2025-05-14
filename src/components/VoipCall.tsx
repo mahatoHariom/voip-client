@@ -72,11 +72,18 @@ const VoipCall = () => {
     };
   }, [callStatus, callTimer]);
 
-  // Log state changes for debugging
+  // Enhanced useEffect for more detailed logging of call state changes
   useEffect(() => {
-    console.log("Call status:", callStatus);
-    console.log("Call info:", callInfo);
-    console.log("Remote identity:", remoteIdentity);
+    console.log(`VoipCall - Call status changed to: ${callStatus}`);
+    console.log(`VoipCall - Call info: ${callInfo}`);
+    console.log(`VoipCall - Remote identity: ${remoteIdentity}`);
+
+    // Special handling for certain call states
+    if (callStatus === "ringing") {
+      console.log("Call is now ringing, waiting for remote party to answer...");
+    } else if (callStatus === "open") {
+      console.log("Call is now open and connected");
+    }
   }, [callStatus, callInfo, remoteIdentity]);
 
   // Reset call attempts when destination changes
@@ -88,21 +95,46 @@ const VoipCall = () => {
 
   const handleInitialize = async () => {
     if (!identityInput) return;
+    console.log(`Attempting to initialize with identity: ${identityInput}`);
     try {
+      console.log("About to call initialize method from useTwilioVoice");
       await initialize(identityInput);
+      console.log("Initialize method completed");
     } catch (error) {
-      console.error("Initialization error:", error);
+      console.error("Initialization error in VoipCall component:", error);
+      // Display more detailed error information to the user
+      alert(
+        `Failed to initialize: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
     }
   };
 
   const handleMakeCall = async () => {
     if (!destination) return;
+
+    // Prevent rapid multiple call attempts
+    if (callStatus === "connecting" || callStatus === "ringing") {
+      console.log("Call already in progress, please wait...");
+      return;
+    }
+
+    console.log(`Attempting to call destination: ${destination}`);
     try {
       setCallAttempts((prev) => prev + 1);
       setLastCalledDestination(destination);
+      console.log("About to call makeCall method from useTwilioVoice");
       await makeCall(destination);
+      console.log("makeCall method completed");
     } catch (error) {
-      console.error("Call error:", error);
+      console.error("Call error in VoipCall component:", error);
+      // Display more detailed error information to the user
+      alert(
+        `Failed to make call: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
     }
   };
 
@@ -334,7 +366,6 @@ const VoipCall = () => {
     <div className="p-6 bg-white rounded-lg shadow-md">
       <div className="mb-4 flex justify-between items-center">
         <h2 className="text-xl font-semibold">Direct Call</h2>
-        <StatusIndicator />
       </div>
 
       {error && (
@@ -360,62 +391,6 @@ const VoipCall = () => {
           between clients.
         </p>
       </div>
-    </div>
-  );
-};
-
-// Extract StatusIndicator to its own component (will be moved to a separate file later)
-const StatusIndicator = () => {
-  const { callStatus } = useTwilioVoice();
-
-  const getStatusColor = () => {
-    switch (callStatus) {
-      case "ready":
-        return "bg-green-100 text-green-800 border-green-200";
-      case "error":
-        return "bg-red-100 text-red-800 border-red-200";
-      case "open":
-        return "bg-blue-100 text-blue-800 border-blue-200";
-      case "connecting":
-        return "bg-blue-100 text-blue-800 border-blue-200";
-      case "reconnecting":
-        return "bg-yellow-100 text-yellow-800 border-yellow-200";
-      case "pending":
-        return "bg-yellow-100 text-yellow-800 border-yellow-200";
-      case "ringing":
-        return "bg-blue-100 text-blue-800 border-blue-200";
-      default:
-        return "bg-gray-100 text-gray-800 border-gray-200";
-    }
-  };
-
-  const getDotColor = () => {
-    switch (callStatus) {
-      case "ready":
-        return "bg-green-500";
-      case "error":
-        return "bg-red-500";
-      case "open":
-        return "bg-blue-500";
-      case "connecting":
-        return "bg-blue-500 animate-pulse";
-      case "reconnecting":
-        return "bg-yellow-500 animate-pulse";
-      case "pending":
-        return "bg-yellow-500";
-      case "ringing":
-        return "bg-blue-500 animate-pulse";
-      default:
-        return "bg-gray-500";
-    }
-  };
-
-  return (
-    <div
-      className={`px-2 py-1 rounded-full text-xs font-medium inline-flex items-center border ${getStatusColor()}`}
-    >
-      <span className={`w-2 h-2 rounded-full mr-1 ${getDotColor()}`}></span>
-      {callStatus}
     </div>
   );
 };

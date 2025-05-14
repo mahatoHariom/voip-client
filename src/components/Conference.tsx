@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useTwilioVoice } from "../hooks/useTwilioVoice";
 
 // Import styles
@@ -24,17 +24,58 @@ const Conference = () => {
   } = useTwilioVoice();
 
   const handleJoinConference = () => {
-    if (conferenceName.trim()) {
-      joinConference(conferenceName.trim());
+    if (!conferenceName.trim()) return;
+
+    // Prevent rapid multiple join attempts
+    if (
+      callStatus === "connecting" ||
+      callStatus === "open" ||
+      callStatus === "reconnecting"
+    ) {
+      console.log(
+        "Conference join already in progress or already connected, please wait..."
+      );
+      return;
+    }
+
+    console.log(`Attempting to join conference: ${conferenceName.trim()}`);
+    try {
+      // Display connecting status immediately for better UX
+      const confName = conferenceName.trim();
+
+      // Call the joinConference method
+      joinConference(confName);
+
+      console.log(`Join conference request submitted for ${confName}`);
+    } catch (error) {
+      console.error("Conference join error:", error);
+      alert(
+        `Failed to join conference: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
     }
   };
 
   const handleInitialize = async () => {
     if (!identityInput) return;
+    console.log(
+      `Attempting to initialize with identity for conference: ${identityInput}`
+    );
     try {
+      console.log(
+        "About to call initialize method from useTwilioVoice in Conference"
+      );
       await initialize(identityInput);
+      console.log("Initialize method completed in Conference");
     } catch (error) {
-      console.error("Initialization error:", error);
+      console.error("Initialization error in Conference component:", error);
+      // Display more detailed error information to the user
+      alert(
+        `Failed to initialize for conference: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
     }
   };
 
@@ -68,16 +109,21 @@ const Conference = () => {
     </div>
   );
 
+  // Add a useEffect to monitor call status for debug purposes
+  useEffect(() => {
+    console.log(`Conference component - Call status changed: ${callStatus}`);
+  }, [callStatus]);
+
   return (
     <div className="p-6 bg-white rounded-lg shadow-md">
       <div className="mb-4 flex justify-between items-center">
         <h2 className="text-xl font-semibold">Conference Call</h2>
-        <StatusIndicator />
+        {/* <StatusIndicator /> */}
       </div>
 
       {error && (
         <div className="mb-4 p-3 bg-red-100 border border-red-300 text-red-700 rounded">
-          {error}
+          {error}s
         </div>
       )}
 
@@ -167,60 +213,60 @@ const Conference = () => {
   );
 };
 
-// Status indicator component
-const StatusIndicator = () => {
-  const { callStatus } = useTwilioVoice();
+// // Status indicator component
+// const StatusIndicator = () => {
+//   const { callStatus } = useTwilioVoice();
 
-  const getStatusColor = () => {
-    switch (callStatus) {
-      case "ready":
-        return "bg-green-100 text-green-800 border-green-200";
-      case "error":
-        return "bg-red-100 text-red-800 border-red-200";
-      case "open":
-        return "bg-blue-100 text-blue-800 border-blue-200";
-      case "connecting":
-        return "bg-blue-100 text-blue-800 border-blue-200";
-      case "reconnecting":
-        return "bg-yellow-100 text-yellow-800 border-yellow-200";
-      case "pending":
-        return "bg-yellow-100 text-yellow-800 border-yellow-200";
-      case "ringing":
-        return "bg-blue-100 text-blue-800 border-blue-200";
-      default:
-        return "bg-gray-100 text-gray-800 border-gray-200";
-    }
-  };
+//   const getStatusColor = () => {
+//     switch (callStatus) {
+//       case "ready":
+//         return "bg-green-100 text-green-800 border-green-200";
+//       case "error":
+//         return "bg-red-100 text-red-800 border-red-200";
+//       case "open":
+//         return "bg-blue-100 text-blue-800 border-blue-200";
+//       case "connecting":
+//         return "bg-blue-100 text-blue-800 border-blue-200";
+//       case "reconnecting":
+//         return "bg-yellow-100 text-yellow-800 border-yellow-200";
+//       case "pending":
+//         return "bg-yellow-100 text-yellow-800 border-yellow-200";
+//       case "ringing":
+//         return "bg-blue-100 text-blue-800 border-blue-200";
+//       default:
+//         return "bg-gray-100 text-gray-800 border-gray-200";
+//     }
+//   };
 
-  const getDotColor = () => {
-    switch (callStatus) {
-      case "ready":
-        return "bg-green-500";
-      case "error":
-        return "bg-red-500";
-      case "open":
-        return "bg-blue-500";
-      case "connecting":
-        return "bg-blue-500 animate-pulse";
-      case "reconnecting":
-        return "bg-yellow-500 animate-pulse";
-      case "pending":
-        return "bg-yellow-500";
-      case "ringing":
-        return "bg-blue-500 animate-pulse";
-      default:
-        return "bg-gray-500";
-    }
-  };
+//   const getDotColor = () => {
+//     switch (callStatus) {
+//       case "ready":
+//         return "bg-green-500";
+//       case "error":
+//         return "bg-red-500";
+//       case "open":
+//         return "bg-blue-500";
+//       case "connecting":
+//         return "bg-blue-500 animate-pulse";
+//       case "reconnecting":
+//         return "bg-yellow-500 animate-pulse";
+//       case "pending":
+//         return "bg-yellow-500";
+//       case "ringing":
+//         return "bg-blue-500 animate-pulse";
+//       default:
+//         return "bg-gray-500";
+//     }
+//   };
 
-  return (
-    <div
-      className={`px-2 py-1 rounded-full text-xs font-medium inline-flex items-center border ${getStatusColor()}`}
-    >
-      <span className={`w-2 h-2 rounded-full mr-1 ${getDotColor()}`}></span>
-      {callStatus}
-    </div>
-  );
-};
+//   return (
+//     <div
+//       className={`px-2 py-1 rounded-full text-xs font-medium inline-flex items-center border ${getStatusColor()}`}
+//     >
+//       <span className={`w-2 h-2 rounded-full mr-1 ${getDotColor()}`}></span>
+//       {callStatus}
+//     </div>
+//   );
+// };
 
 export default Conference;

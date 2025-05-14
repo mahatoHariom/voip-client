@@ -19,7 +19,8 @@ interface TwilioCall extends Call {
       | "error"
       | "warning"
       | "reconnecting"
-      | "reconnected",
+      | "reconnected"
+      | "ringing",
     listener: (arg?: unknown) => void
   ): this;
   parameters: Record<string, string>;
@@ -61,26 +62,33 @@ export const useTwilioVoice = () => {
   const activeCallRef = useRef<TwilioCall | null>(null);
   const tokenRef = useRef<string>("");
   const tokenRefreshTimerRef = useRef<number | null>(null);
+  const cleanupCallResourcesRef = useRef<() => void>(() => {});
+
+  const updateState = useCallback((updates: Partial<typeof state>) => {
+    setState((prev) => ({ ...prev, ...updates }));
+  }, []);
 
   // Enhanced function to properly clean up call resources
   const cleanupCallResources = useCallback(() => {
+    console.log("Cleaning up call resources");
+
     if (activeCallRef.current) {
       try {
-        console.log("Cleaning up call resources");
-
         // Make sure the call is properly disconnected
         if (activeCallRef.current.status() !== "closed") {
+          console.log("Disconnecting active call");
           activeCallRef.current.disconnect();
+        } else {
+          console.log("Call already closed, no need to disconnect");
         }
 
         // Force release of audio resources
         if (deviceRef.current) {
           try {
             // Attempt to release audio resources
+            console.log("Releasing audio resources");
             deviceRef.current.audio?.outgoing(false);
             deviceRef.current.audio?.incoming(false);
-
-            // Additional cleanup for any active audio elements
             console.log("Audio resources released");
           } catch (err) {
             console.warn("Error releasing device audio:", err);
@@ -92,12 +100,18 @@ export const useTwilioVoice = () => {
       }
 
       // Clear the active call reference
+      console.log("Clearing active call reference");
       activeCallRef.current = null;
+    } else {
+      console.log("No active call to clean up");
     }
 
     // Reset mute state and remote identity
     updateState({ isMuted: false, remoteIdentity: "" });
-  }, []);
+  }, [updateState]);
+
+  // Store the cleanup function in a ref
+  cleanupCallResourcesRef.current = cleanupCallResources;
 
   // Cleanup resources when component unmounts
   useEffect(() => {
@@ -109,7 +123,7 @@ export const useTwilioVoice = () => {
       }
 
       // Clean up call resources
-      cleanupCallResources();
+      cleanupCallResourcesRef.current();
 
       // Destroy device if it exists
       if (deviceRef.current) {
@@ -121,10 +135,6 @@ export const useTwilioVoice = () => {
         }
       }
     };
-  }, [cleanupCallResources]);
-
-  const updateState = useCallback((updates: Partial<typeof state>) => {
-    setState((prev) => ({ ...prev, ...updates }));
   }, []);
 
   const handleError = useCallback(
@@ -224,10 +234,18 @@ export const useTwilioVoice = () => {
 
   const setupCallListeners = useCallback(
     (call: TwilioCall) => {
+      console.log("Setting up call listeners for call:", call);
+
+      // Call ringing
+      call.on("ringing", () => {
+        console.log("Remote device is ringing");
+        updateCallStatus("ringing", "Ringing...");
+      });
+
       // Call accepted
       call.on("accept", () => {
         console.log("Call accepted");
-        updateCallStatus("open");
+        updateCallStatus("open", "Connected");
       });
 
       // Call error
@@ -235,6 +253,8 @@ export const useTwilioVoice = () => {
         console.error("Call error:", error);
         handleError(error, "Call error");
         cleanupCallResources();
+        // Reset to ready state
+        setTimeout(() => updateCallStatus("ready", ""), 500);
       });
 
       // Call warning
@@ -253,7 +273,7 @@ export const useTwilioVoice = () => {
       // Call reconnected
       call.on("reconnected", () => {
         console.log("Call reconnected successfully");
-        updateCallStatus("open", "Reconnected");
+        updateCallStatus("open", "Call reconnected");
       });
 
       // Call ended
@@ -269,6 +289,11 @@ export const useTwilioVoice = () => {
 
           // Then clean up resources
           cleanupCallResources();
+
+          // Reset status back to ready after a small delay
+          setTimeout(() => {
+            updateCallStatus("ready", "");
+          }, 300);
         });
       });
     },
@@ -277,6 +302,7 @@ export const useTwilioVoice = () => {
 
   const initialize = useCallback(
     async (userIdentity: string) => {
+      console.log("Starting device initialization for identity:", userIdentity);
       updateState({
         identity: userIdentity,
         error: "",
@@ -295,15 +321,46 @@ export const useTwilioVoice = () => {
         cleanupCallResources();
 
         // Get token from server
+        console.log("Requesting token from server...");
         const { token } = await getToken(userIdentity);
+
+        if (!token) {
+          throw new Error("Received empty token from server");
+        }
+
+        console.log("Token received successfully");
         tokenRef.current = token;
 
-        // Create new device with improved settings
+        // Create new device with improved settings and handle browser permissions
+        console.log("Creating new Twilio device...");
+
+        // First request permissions to ensure microphone access
+        try {
+          console.log("Requesting microphone permissions...");
+          const stream = await navigator.mediaDevices.getUserMedia({
+            audio: true,
+          });
+          console.log(
+            "Microphone permission granted:",
+            stream.getAudioTracks()
+          );
+          // Release the stream immediately as Twilio will request it again
+          stream.getTracks().forEach((track) => track.stop());
+        } catch (err) {
+          console.error("Error requesting microphone permission:", err);
+          throw new Error(
+            "Microphone access is required. Please allow access and try again."
+          );
+        }
+
         const device = new Device(token, {
-          logLevel: "warn",
+          logLevel: "debug", // Set to debug for more verbose logs
           maxAverageBitrate: 16000, // Set max bitrate for better audio quality
+          // Allow local audio devices to connect immediately
+          allowIncomingWhileBusy: true,
         }) as TwilioDevice;
 
+        console.log("Device created, setting up event listeners...");
         deviceRef.current = device;
 
         // Set up device event listeners
@@ -342,18 +399,46 @@ export const useTwilioVoice = () => {
         setupTokenRefresh(userIdentity);
 
         // Register the device
-        await device.register();
-        updateState({ isInitialized: true });
+        console.log("Registering device with Twilio...");
+
+        try {
+          await device.register();
+          console.log("Device registration completed successfully");
+          updateState({ isInitialized: true });
+        } catch (regError) {
+          console.error("Device registration error:", regError);
+          throw new Error(
+            `Failed to register device: ${
+              regError instanceof Error ? regError.message : "Unknown error"
+            }`
+          );
+        }
       } catch (error) {
         const errorMsg = `Initialization error: ${
           error instanceof Error ? error.message : "Unknown error"
         }`;
         console.error(errorMsg);
+        // Log more details about the error
+        console.error("Error details:", error);
+
         updateState({
           error: errorMsg,
           callStatus: "error",
           isInitialized: false,
         });
+
+        // Try to recover by resetting device state
+        if (deviceRef.current) {
+          try {
+            deviceRef.current.destroy();
+          } catch (e) {
+            console.warn("Error destroying device during recovery:", e);
+          }
+          deviceRef.current = null;
+        }
+
+        // Re-throw the error to allow the component to handle it
+        throw error;
       }
     },
     [
@@ -377,6 +462,13 @@ export const useTwilioVoice = () => {
 
         console.log(`Making ${callType} call to: ${to}`);
 
+        // First update the UI to show we're connecting
+        if (callType === "conference") {
+          updateCallStatus("connecting", `Joining conference ${to}...`);
+        } else {
+          updateCallStatus("connecting", `Calling ${to}...`);
+        }
+
         // Store the destination identity
         updateState({ remoteIdentity: to });
 
@@ -384,12 +476,15 @@ export const useTwilioVoice = () => {
         let formattedTo;
         if (callType === "conference") {
           formattedTo = `conference:${to}`;
+          console.log(`Formatted conference destination: ${formattedTo}`);
         } else {
           // Direct call
           formattedTo = to.startsWith("client:") ? to : `client:${to}`;
+          console.log(`Formatted 1:1 call destination: ${formattedTo}`);
         }
 
         // Make the call with improved settings
+        console.log("Calling Twilio Device.connect()...");
         const call = await deviceRef.current.connect({
           params: {
             To: formattedTo,
@@ -406,20 +501,25 @@ export const useTwilioVoice = () => {
           },
         });
 
+        console.log("Call initiated successfully, setting up call object");
+
         // Set up call listeners
         activeCallRef.current = call as TwilioCall;
         setupCallListeners(activeCallRef.current);
 
-        // Update call status with the appropriate message
-        if (callType === "conference") {
-          updateCallStatus("connecting", `Joining conference ${to}...`);
-        } else {
-          updateCallStatus("connecting", `Calling ${to}...`);
+        // For direct calls, update to ringing state
+        if (callType !== "conference") {
+          updateCallStatus("ringing", `Calling ${to}...`);
         }
+
+        return activeCallRef.current;
       } catch (error) {
         console.error("Call failed:", error);
         handleError(error, "Failed to make call");
         cleanupCallResources();
+        // Reset status to ready
+        updateCallStatus("ready", "");
+        throw error;
       }
     },
     [
@@ -492,9 +592,35 @@ export const useTwilioVoice = () => {
   // Join a specific conference
   const joinConference = useCallback(
     (conferenceName: string) => {
-      return makeCall(conferenceName, "conference");
+      if (!deviceRef.current) {
+        console.error("Cannot join conference - device not initialized");
+        return Promise.reject(new Error("Device not initialized"));
+      }
+
+      if (!conferenceName.trim()) {
+        console.error("Cannot join conference - empty conference name");
+        return Promise.reject(new Error("Conference name cannot be empty"));
+      }
+
+      console.log(`Joining conference: ${conferenceName}`);
+
+      // Update state immediately to provide user feedback
+      updateCallStatus("connecting", `Joining conference ${conferenceName}...`);
+
+      // Make the actual call
+      try {
+        return makeCall(conferenceName, "conference");
+      } catch (error) {
+        console.error("Failed to join conference:", error);
+        // Reset state after a short delay
+        setTimeout(() => {
+          updateCallStatus("ready", "");
+        }, 500);
+
+        return Promise.reject(error);
+      }
     },
-    [makeCall]
+    [makeCall, updateCallStatus, deviceRef]
   );
 
   return {
