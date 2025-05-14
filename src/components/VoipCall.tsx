@@ -330,63 +330,10 @@ const VoipCall = () => {
     }
   };
 
-  const StatusIndicator = () => {
-    const getStatusColor = () => {
-      switch (callStatus) {
-        case "ready":
-          return "bg-green-100 text-green-800 border-green-200";
-        case "error":
-          return "bg-red-100 text-red-800 border-red-200";
-        case "open":
-          return "bg-blue-100 text-blue-800 border-blue-200";
-        case "connecting":
-          return "bg-blue-100 text-blue-800 border-blue-200";
-        case "reconnecting":
-          return "bg-yellow-100 text-yellow-800 border-yellow-200";
-        case "pending":
-          return "bg-yellow-100 text-yellow-800 border-yellow-200";
-        case "ringing":
-          return "bg-blue-100 text-blue-800 border-blue-200";
-        default:
-          return "bg-gray-100 text-gray-800 border-gray-200";
-      }
-    };
-
-    const getDotColor = () => {
-      switch (callStatus) {
-        case "ready":
-          return "bg-green-500";
-        case "error":
-          return "bg-red-500";
-        case "open":
-          return "bg-blue-500";
-        case "connecting":
-          return "bg-blue-500 animate-pulse";
-        case "reconnecting":
-          return "bg-yellow-500 animate-pulse";
-        case "pending":
-          return "bg-yellow-500";
-        case "ringing":
-          return "bg-blue-500 animate-pulse";
-        default:
-          return "bg-gray-500";
-      }
-    };
-
-    return (
-      <div
-        className={`px-2 py-1 rounded-full text-xs font-medium inline-flex items-center border ${getStatusColor()}`}
-      >
-        <span className={`w-2 h-2 rounded-full mr-1 ${getDotColor()}`}></span>
-        {callStatus}
-      </div>
-    );
-  };
-
   return (
-    <div className="max-w-md mx-auto p-6 bg-white rounded-lg shadow-md">
+    <div className="p-6 bg-white rounded-lg shadow-md">
       <div className="mb-4 flex justify-between items-center">
-        <h2 className="text-xl font-semibold">Twilio VoIP Call</h2>
+        <h2 className="text-xl font-semibold">Direct Call</h2>
         <StatusIndicator />
       </div>
 
@@ -413,6 +360,62 @@ const VoipCall = () => {
           between clients.
         </p>
       </div>
+    </div>
+  );
+};
+
+// Extract StatusIndicator to its own component (will be moved to a separate file later)
+const StatusIndicator = () => {
+  const { callStatus } = useTwilioVoice();
+
+  const getStatusColor = () => {
+    switch (callStatus) {
+      case "ready":
+        return "bg-green-100 text-green-800 border-green-200";
+      case "error":
+        return "bg-red-100 text-red-800 border-red-200";
+      case "open":
+        return "bg-blue-100 text-blue-800 border-blue-200";
+      case "connecting":
+        return "bg-blue-100 text-blue-800 border-blue-200";
+      case "reconnecting":
+        return "bg-yellow-100 text-yellow-800 border-yellow-200";
+      case "pending":
+        return "bg-yellow-100 text-yellow-800 border-yellow-200";
+      case "ringing":
+        return "bg-blue-100 text-blue-800 border-blue-200";
+      default:
+        return "bg-gray-100 text-gray-800 border-gray-200";
+    }
+  };
+
+  const getDotColor = () => {
+    switch (callStatus) {
+      case "ready":
+        return "bg-green-500";
+      case "error":
+        return "bg-red-500";
+      case "open":
+        return "bg-blue-500";
+      case "connecting":
+        return "bg-blue-500 animate-pulse";
+      case "reconnecting":
+        return "bg-yellow-500 animate-pulse";
+      case "pending":
+        return "bg-yellow-500";
+      case "ringing":
+        return "bg-blue-500 animate-pulse";
+      default:
+        return "bg-gray-500";
+    }
+  };
+
+  return (
+    <div
+      className={`px-2 py-1 rounded-full text-xs font-medium inline-flex items-center border ${getStatusColor()}`}
+    >
+      <span className={`w-2 h-2 rounded-full mr-1 ${getDotColor()}`}></span>
+      {callStatus}
     </div>
   );
 };
