@@ -338,10 +338,15 @@ export const useTwilioVoice = () => {
         try {
           console.log("Requesting microphone permissions...");
           const stream = await navigator.mediaDevices.getUserMedia({
-            audio: true,
+            audio: {
+              // Add advanced audio constraints for echo cancellation
+              echoCancellation: true,
+              noiseSuppression: true,
+              autoGainControl: true,
+            },
           });
           console.log(
-            "Microphone permission granted:",
+            "Microphone permission granted with enhanced echo cancellation:",
             stream.getAudioTracks()
           );
           // Release the stream immediately as Twilio will request it again
